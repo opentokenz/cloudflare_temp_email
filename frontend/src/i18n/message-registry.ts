@@ -42,6 +42,10 @@ export const MESSAGE_REGISTRY = {
       "en": "Auto Refresh",
       "zh": "自动刷新"
     },
+    "backToList": {
+      "en": "Back to List",
+      "zh": "返回列表"
+    },
     "cancelMultiAction": {
       "en": "Cancel Multi Action",
       "zh": "取消多选"
@@ -185,6 +189,14 @@ export const MESSAGE_REGISTRY = {
     "fullscreen": {
       "en": "Fullscreen",
       "zh": "全屏"
+    },
+    "loadRemoteImages": {
+      "en": "Load Images",
+      "zh": "加载图片"
+    },
+    "remoteImagesBlocked": {
+      "en": "{count} remote resources blocked to protect your privacy",
+      "zh": "已阻止 {count} 项外部资源以保护隐私"
     },
     "reply": {
       "en": "Reply",
@@ -2090,6 +2102,10 @@ export const MESSAGE_REGISTRY = {
     }
   },
   "views.common.Appearance": {
+    "autoLoadRemoteImages": {
+      "en": "Automatically load external images in mail body",
+      "zh": "自动加载邮件正文中的外部图片"
+    },
     "autoRefreshInterval": {
       "en": "Auto Refresh Interval(Sec)",
       "zh": "自动刷新间隔(秒)"
@@ -2107,8 +2123,20 @@ export const MESSAGE_REGISTRY = {
       "zh": "左侧"
     },
     "mailboxSplitSize": {
-      "en": "Mailbox Split Size",
-      "zh": "邮箱界面分栏大小"
+      "en": "Left list width in two-column mailbox view",
+      "zh": "邮箱双栏视图左侧列表宽度占比"
+    },
+    "mailListView": {
+      "en": "Full-width mailbox list view",
+      "zh": "邮箱全宽列表视图"
+    },
+    "mailListPreviewLineClamp": {
+      "en": "Body Preview Lines",
+      "zh": "正文预览行数"
+    },
+    "off": {
+      "en": "Off",
+      "zh": "关闭"
     },
     "preferShowTextMail": {
       "en": "Display text Mail by default",
