@@ -1,6 +1,6 @@
 import { Context } from "hono";
 
-import { getBooleanValue, getJsonSetting, normalizeAddressDomain } from "../utils";
+import { getJsonSetting, normalizeAddressDomain } from "../utils";
 import { sendMailToTelegram } from "../telegram_api";
 import { auto_reply } from "./auto_reply";
 import { isBlocked } from "./black_list";
@@ -11,12 +11,15 @@ import { extractEmailInfo } from "./ai_extract";
 import { forwardEmail } from "./forward";
 import { EmailRuleSettings } from "../models";
 import { CONSTANTS } from "../constants";
-import { compressText } from "../gzip";
+import { deleteRawMail, storeRawMail } from "./storage";
 
 
-async function email(message: ForwardableEmailMessage, env: Bindings, ctx: ExecutionContext) {
+async function receiveEmail(
+    message: ForwardableEmailMessage, env: Bindings, ctx: ExecutionContext,
+    allowForward: boolean = true, onStored?: () => void
+): Promise<void> {
     const toAddress = normalizeAddressDomain(message.to);
-    if (await isBlocked(message.from, env)) {
+    if (await isBlocked(message, env)) {
         message.setReject("Reject from address");
         console.log(`Reject message from ${message.from} to ${toAddress}`);
         return;
@@ -66,70 +69,34 @@ async function email(message: ForwardableEmailMessage, env: Bindings, ctx: Execu
 
     const message_id = message.headers.get("Message-ID");
     // save email
-    try {
-        let success = false;
-        if (getBooleanValue(env.ENABLE_MAIL_GZIP)) {
-            let compressed: ArrayBuffer | null = null;
-            try {
-                compressed = await compressText(parsedEmailContext.rawEmail);
-            } catch (gzipError) {
-                console.error("gzip compression failed, falling back to plaintext", gzipError);
-            }
-            if (compressed) {
-                try {
-                    ({ success } = await env.DB.prepare(
-                        `INSERT INTO raw_mails (source, address, raw_blob, message_id) VALUES (?, ?, ?, ?)`
-                    ).bind(
-                        message.from, toAddress, compressed, message_id
-                    ).run());
-                } catch (dbError) {
-                    // Fallback to plaintext only if raw_blob column is missing (migration not applied)
-                    const errMsg = String(dbError);
-                    if (errMsg.includes('raw_blob') || errMsg.includes('no such column')) {
-                        console.error("raw_blob column missing, falling back to plaintext", dbError);
-                        ({ success } = await env.DB.prepare(
-                            `INSERT INTO raw_mails (source, address, raw, message_id) VALUES (?, ?, ?, ?)`
-                        ).bind(
-                            message.from, toAddress, parsedEmailContext.rawEmail, message_id
-                        ).run());
-                    } else {
-                        throw dbError;
-                    }
-                }
-            } else {
-                ({ success } = await env.DB.prepare(
-                    `INSERT INTO raw_mails (source, address, raw, message_id) VALUES (?, ?, ?, ?)`
-                ).bind(
-                    message.from, toAddress, parsedEmailContext.rawEmail, message_id
-                ).run());
-            }
-        } else {
-            ({ success } = await env.DB.prepare(
-                `INSERT INTO raw_mails (source, address, raw, message_id) VALUES (?, ?, ?, ?)`
-            ).bind(
-                message.from, toAddress, parsedEmailContext.rawEmail, message_id
-            ).run());
-        }
+    const storedMailId = await storeRawMail(
+        env, message.from, toAddress, message_id, parsedEmailContext.rawEmail
+    ).then(({ success, meta }) => {
         if (!success) {
             message.setReject(`Failed save message to ${toAddress}`);
             console.error(`Failed save message from ${message.from} to ${toAddress}`);
         }
-    }
-    catch (error) {
+        return success ? meta.last_row_id : undefined;
+    }).catch((error) => {
         console.error("save email error", error);
-    }
+        return undefined;
+    });
+    if (storedMailId) onStored?.();
 
     // forward email
-    await forwardEmail(message, env);
+    const { deleteOriginal: deleteAfterForward } = allowForward
+        ? await forwardEmail(message, env, rawEmail,
+            (targetMessage, onTargetStored) => receiveEmail(targetMessage, env, ctx, false, onTargetStored))
+        : { deleteOriginal: false };
 
     // AI email content extraction
-    const aiExtractResult = await extractEmailInfo(parsedEmailContext, env, message_id, toAddress);
+    const aiExtractResult = await extractEmailInfo(parsedEmailContext, env, storedMailId, toAddress);
 
     // send email to telegram
     try {
         await sendMailToTelegram(
             { env: env } as Context<HonoCustomType>,
-            toAddress, parsedEmailContext, message_id, aiExtractResult);
+            toAddress, parsedEmailContext, storedMailId, aiExtractResult);
     } catch (error) {
         console.error("send mail to telegram error", error);
     }
@@ -138,7 +105,7 @@ async function email(message: ForwardableEmailMessage, env: Bindings, ctx: Execu
     try {
         await triggerWebhook(
             { env: env } as Context<HonoCustomType>,
-            toAddress, parsedEmailContext, message_id, aiExtractResult
+            toAddress, parsedEmailContext, storedMailId, aiExtractResult
         );
     } catch (error) {
         console.error("send webhook error", error);
@@ -160,7 +127,14 @@ async function email(message: ForwardableEmailMessage, env: Bindings, ctx: Execu
     }
 
     // auto reply email
-    await auto_reply(message, env, toAddress);
+    if (allowForward) await auto_reply(message, env, toAddress);
+
+    const shouldDeleteMail = deleteAfterForward;
+    if (shouldDeleteMail && storedMailId) await deleteRawMail(env, storedMailId, toAddress);
+}
+
+async function email(message: ForwardableEmailMessage, env: Bindings, ctx: ExecutionContext): Promise<void> {
+    await receiveEmail(message, env, ctx);
 }
 
 export { email }
